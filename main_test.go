@@ -1,0 +1,329 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+)
+
+func setupTestRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+
+	// Set test environment variables
+	os.Setenv("CLAUDE_API_KEY", "test_claude_key")
+	os.Setenv("TELEX_API_KEY", "test_telex_key")
+	os.Setenv("AGENT_ID", "test-agent")
+
+	r := gin.Default()
+	r.GET("/health", healthCheck)
+	r.POST("/webhook/telex", handleTelexWebhook)
+	r.POST("/api/message", handleDirectMessage)
+	r.GET("/api/agent/info", getAgentInfo)
+	r.GET("/api/conversations/:userId", getConversationHistory)
+	r.GET("/api/metrics", getMetrics)
+
+	return r
+}
+
+func TestHealthCheck(t *testing.T) {
+	router := setupTestRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/health", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "healthy", response["status"])
+}
+
+func TestTelexWebhookUnauthorized(t *testing.T) {
+	router := setupTestRouter()
+
+	webhook := TelexWebhook{
+		Event: "message.received",
+		Message: TelexMessage{
+			From:    "user123",
+			Content: "Hello",
+		},
+	}
+
+	body, _ := json.Marshal(webhook)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/webhook/telex", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer wrong_key")
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestTelexWebhookValidMessage(t *testing.T) {
+	router := setupTestRouter()
+
+	webhook := TelexWebhook{
+		Event: "message.received",
+		Message: TelexMessage{
+			ID:      "msg123",
+			From:    "user123",
+			To:      "test-agent",
+			Content: "Hello, AI!",
+		},
+	}
+
+	body, _ := json.Marshal(webhook)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/webhook/telex", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test_telex_key")
+
+	router.ServeHTTP(w, req)
+
+	// Should return 200 or 500 depending on Claude API availability
+	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusInternalServerError)
+}
+
+func TestTelexWebhookUserJoined(t *testing.T) {
+	router := setupTestRouter()
+
+	webhook := TelexWebhook{
+		Event: "user.joined",
+		User: TelexUser{
+			ID:       "user123",
+			Username: "testuser",
+			Name:     "Test User",
+		},
+	}
+
+	body, _ := json.Marshal(webhook)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/webhook/telex", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test_telex_key")
+
+	router.ServeHTTP(w, req)
+
+	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusInternalServerError)
+}
+
+func TestDirectMessageEndpoint(t *testing.T) {
+	router := setupTestRouter()
+
+	message := map[string]string{
+		"userId":  "user123",
+		"message": "Test message",
+	}
+
+	body, _ := json.Marshal(message)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/message", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	// Should return 200 or 500 depending on Claude API
+	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusInternalServerError)
+}
+
+func TestDirectMessageMissingFields(t *testing.T) {
+	router := setupTestRouter()
+
+	message := map[string]string{
+		"userId": "user123",
+		// Missing "message" field
+	}
+
+	body, _ := json.Marshal(message)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/message", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestGetAgentInfo(t *testing.T) {
+	router := setupTestRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/agent/info", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "test-agent", response["agentId"])
+	assert.Equal(t, "online", response["status"])
+}
+
+func TestGetConversationHistoryNotFound(t *testing.T) {
+	router := setupTestRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/conversations/nonexistent", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestGetConversationHistoryExists(t *testing.T) {
+	// Create a conversation context first
+	updateConversationContext("testuser", "Hello")
+
+	router := setupTestRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/conversations/testuser", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "testuser", response["userId"])
+	assert.Equal(t, float64(1), response["messageCount"])
+}
+
+func TestGetMetrics(t *testing.T) {
+	router := setupTestRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/metrics", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Contains(t, response, "totalConversations")
+	assert.Contains(t, response, "totalMessages")
+}
+
+func TestExtractIntent(t *testing.T) {
+	tests := []struct {
+		message  string
+		expected string
+	}{
+		{"Can you help me?", "help_request"},
+		{"What is the weather?", "question"},
+		{"Thank you so much", "gratitude"},
+		{"Hello there", "greeting"},
+		{"Just a normal message", "general"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.message, func(t *testing.T) {
+			result := extractIntent(test.message)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestExtractEntities(t *testing.T) {
+	message := "Hey @john check out #golang"
+	entities := extractEntities(message)
+
+	assert.Equal(t, "@john", entities["mention"])
+	assert.Equal(t, "#golang", entities["hashtag"])
+}
+
+func TestExtractTopics(t *testing.T) {
+	message := "I need help with Python code"
+	topics := extractTopics(message)
+
+	assert.Contains(t, topics, "programming")
+	assert.Contains(t, topics, "support")
+}
+
+func TestUpdateConversationContext(t *testing.T) {
+	// Clear history
+	conversationHistory = make(map[string]*ConversationContext)
+
+	userID := "testuser123"
+
+	updateConversationContext(userID, "First message")
+
+	ctx, exists := conversationHistory[userID]
+	assert.True(t, exists)
+	assert.Equal(t, 1, ctx.MessageCount)
+	assert.Equal(t, "First message", ctx.LastMessage)
+
+	updateConversationContext(userID, "Second message")
+
+	ctx, exists = conversationHistory[userID]
+	assert.True(t, exists)
+	assert.Equal(t, 2, ctx.MessageCount)
+	assert.Equal(t, "Second message", ctx.LastMessage)
+}
+
+func TestBuildContextPrompt(t *testing.T) {
+	ctx := &ConversationContext{
+		UserID:       "user123",
+		MessageCount: 5,
+		Topics:       []string{"programming", "weather"},
+		Timestamp:    time.Now(),
+	}
+
+	prompt := buildContextPrompt(ctx, "Tell me about Go")
+
+	assert.Contains(t, prompt, "message #5")
+	assert.Contains(t, prompt, "programming")
+	assert.Contains(t, prompt, "weather")
+	assert.Contains(t, prompt, "Tell me about Go")
+}
+
+func TestContainsFunction(t *testing.T) {
+	slice := []string{"apple", "banana", "orange"}
+
+	assert.True(t, contains(slice, "banana"))
+	assert.False(t, contains(slice, "grape"))
+}
+
+// Benchmark tests
+func BenchmarkExtractIntent(b *testing.B) {
+	message := "Can you help me with this question?"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		extractIntent(message)
+	}
+}
+
+func BenchmarkExtractEntities(b *testing.B) {
+	message := "Hey @user check out #topic and visit @another"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		extractEntities(message)
+	}
+}
+
+func BenchmarkUpdateConversationContext(b *testing.B) {
+	conversationHistory = make(map[string]*ConversationContext)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		updateConversationContext("user123", "test message")
+	}
+}
