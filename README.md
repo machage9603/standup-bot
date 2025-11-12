@@ -1,6 +1,6 @@
 # Telex.im AI Agent
 
-A production-ready AI agent built with Go and Claude AI, fully integrated with Telex.im messaging platform.
+A production-ready AI agent built with Go and Groq AI, fully integrated with Telex.im messaging platform.
 
 ## 🌟 Features
 
@@ -18,7 +18,7 @@ A production-ready AI agent built with Go and Claude AI, fully integrated with T
 ### Prerequisites
 
 - Go 1.21+
-- Claude API key (from Anthropic)
+- Groq API key (free from Groq)
 - Telex.im API key
 - Docker (optional, for containerized deployment)
 
@@ -54,7 +54,7 @@ The agent will start on `http://localhost:8080`
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `CLAUDE_API_KEY` | Your Claude API key | Yes | - |
+| `GROQ_API_KEY` | Your Groq API key | Yes | - |
 | `TELEX_API_KEY` | Your Telex.im API key | Yes | - |
 | `TELEX_BASE_URL` | Telex.im API base URL | No | `https://api.telex.im/v1` |
 | `AGENT_ID` | Unique identifier for your agent | No | `ai-agent-001` |
@@ -147,7 +147,7 @@ docker build -t telex-ai-agent .
 ```bash
 docker run -d \
   -p 8080:8080 \
-  -e CLAUDE_API_KEY=your_key \
+  -e GROQ_API_KEY=your_key \
   -e TELEX_API_KEY=your_key \
   --name telex-agent \
   telex-ai-agent
@@ -162,7 +162,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - TELEX_API_KEY=${TELEX_API_KEY}
       - TELEX_BASE_URL=${TELEX_BASE_URL}
     restart: unless-stopped
@@ -191,7 +191,7 @@ railway up
 
 3. Set environment variables:
 ```bash
-railway variables set CLAUDE_API_KEY=your_key
+railway variables set GROQ_API_KEY=your_key
 railway variables set TELEX_API_KEY=your_key
 ```
 
@@ -212,7 +212,7 @@ curl -L https://fly.io/install.sh | sh
 2. Launch your app:
 ```bash
 fly launch
-fly secrets set CLAUDE_API_KEY=your_key
+fly secrets set GROQ_API_KEY=your_key
 fly secrets set TELEX_API_KEY=your_key
 fly deploy
 ```
@@ -267,7 +267,7 @@ Access metrics at `http://localhost:8080/api/metrics`:
 
 ```
 ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-│  Telex.im   │────────▶│  AI Agent    │────────▶│  Claude AI  │
+│  Telex.im   │────────▶│  AI Agent    │────────▶│  Groq AI    │
 │  Platform   │◀────────│   (Go/Gin)   │◀────────│     API     │
 └─────────────┘         └──────────────┘         └─────────────┘
                               │
@@ -282,7 +282,7 @@ Access metrics at `http://localhost:8080/api/metrics`:
 
 1. **Webhook Handler**: Receives events from Telex.im
 2. **Message Processor**: Handles incoming messages with context
-3. **AI Engine**: Integrates with Claude API for intelligent responses
+3. **AI Engine**: Integrates with Groq API for intelligent responses
 4. **Context Manager**: Maintains conversation state and history
 5. **Telex API Client**: Sends responses back to users
 
@@ -316,7 +316,7 @@ The agent implements comprehensive error handling:
 
 ## 📈 Performance
 
-- **Response Time**: < 2s average (Claude API dependent)
+- **Response Time**: < 2s average (Groq API dependent)
 - **Throughput**: Handles 100+ messages/second
 - **Memory**: ~50MB base footprint
 - **Concurrent Users**: Tested with 1000+ simultaneous conversations
@@ -363,7 +363,7 @@ func handleCustomEvent(c *gin.Context, data CustomData) {
 - Check Telex.im webhook configuration
 - Ensure Authorization header is correct
 
-### Claude API errors
+### Groq API errors
 - Verify API key is valid
 - Check rate limits
 - Ensure proper internet connectivity
