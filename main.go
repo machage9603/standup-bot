@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -59,7 +60,10 @@ type ConversationContext struct {
 }
 
 // Agent state management
-var conversationHistory = make(map[string]*ConversationContext)
+var (
+	conversationHistory   = make(map[string]*ConversationContext)
+	conversationHistoryMu sync.RWMutex
+)
 
 // Groq AI configuration (FREE API!)
 var (
@@ -250,7 +254,9 @@ func handleDirectMessage(c *gin.Context) {
 
 func generateAIResponse(userID, message string) (*AgentResponse, error) {
 	// Get conversation context
+	conversationHistoryMu.RLock()
 	ctx := conversationHistory[userID]
+	conversationHistoryMu.RUnlock()
 
 	// Build context-aware prompt
 	contextPrompt := buildContextPrompt(ctx, message)
@@ -387,6 +393,9 @@ func sendTelexMessage(toUserID, content string) error {
 }
 
 func updateConversationContext(userID, message string) {
+	conversationHistoryMu.Lock()
+	defer conversationHistoryMu.Unlock()
+
 	ctx, exists := conversationHistory[userID]
 	if !exists {
 		ctx = &ConversationContext{
@@ -494,7 +503,10 @@ func getAgentInfo(c *gin.Context) {
 func getConversationHistory(c *gin.Context) {
 	userID := c.Param("userId")
 
+	conversationHistoryMu.RLock()
 	ctx, exists := conversationHistory[userID]
+	conversationHistoryMu.RUnlock()
+
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No conversation found"})
 		return
@@ -510,12 +522,14 @@ func getConversationHistory(c *gin.Context) {
 }
 
 func getMetrics(c *gin.Context) {
+	conversationHistoryMu.RLock()
 	totalConversations := len(conversationHistory)
 	totalMessages := 0
 
 	for _, ctx := range conversationHistory {
 		totalMessages += ctx.MessageCount
 	}
+	conversationHistoryMu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
 		"totalConversations": totalConversations,
