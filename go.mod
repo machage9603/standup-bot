@@ -1,6 +1,6 @@
 module github.com/machage9603/standup-bot
 
-go 1.25.3
+go 1.21
 
 require (
 	github.com/gin-gonic/gin v1.9.1
